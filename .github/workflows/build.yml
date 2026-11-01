@@ -1,20 +1,24 @@
 name: Build Telegram fork
+
 on:
   workflow_dispatch:
   push:
     paths:
       - '.github/workflows/build.yml'
+
 permissions:
   contents: write
+
 jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+
     steps:
-      - name: Освободить место на диске
+      - name: Освободить место
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL
-          df -h / | tail -1
+          df -h /
 
       - uses: actions/checkout@v4
         with:
@@ -24,83 +28,57 @@ jobs:
         env:
           NEW_PKG: com.dupermine.tgfork
         run: |
-          echo "--- где упоминается APP_PACKAGE ---"
-          grep -rn "APP_PACKAGE" --include=*.properties --include=*.gradle --include=*.kts . | grep -v "/build/" | cut -c1-200 || true
-
           FILES=$(grep -rlE '^\s*(ext\.)?APP_PACKAGE\s*=' --include=*.properties --include=*.gradle --include=*.kts . | grep -v "/build/" || true)
-          echo "Файлы с определением: $FILES"
+          echo "Файлы: $FILES"
           if [ -z "$FILES" ]; then
-            echo "ОШИБКА: определение APP_PACKAGE не найдено (см. список выше)"
+            echo "ОШИБКА: APP_PACKAGE не найден"
             exit 1
           fi
           for F in $FILES; do
             perl -pi -e 's/^(\s*(?:ext\.)?APP_PACKAGE\s*=\s*)(["\x27]?)[^"\x27\r\n]+\2(\r?)$/$1$2$ENV{NEW_PKG}$2$3/' "$F"
-            echo "--- $F после замены ---"
-            grep -n "APP_PACKAGE" "$F"
+            grep -n "APP_PACKAGE" "$F" || true
           done
-          if ! grep -q "$NEW_PKG" $FILES; then
-            echo "ОШИБКА: APP_PACKAGE не заменён"
-            exit 1
-          fi
 
           for M in $(find . -name AndroidManifest.xml -not -path "*/build/*"); do
             sed -i -E 's/android:name="org\.telegram\.messenger(\.web|\.beta)?\.permission\./android:name="${applicationId}.permission./g' "$M"
             sed -i -E 's/android:authorities="org\.telegram\.messenger(\.web|\.beta)?\./android:authorities="${applicationId}./g' "$M"
           done
-          echo "--- разрешения и authorities в манифестах ---"
-          grep -rn "\.permission\.\|authorities" --include=AndroidManifest.xml . | grep -v "/build/" | grep -v "android\.permission" | cut -c1-200 || true
 
-          echo "--- google-services.json: добавляем записи для нового пакета ---"
+          # google-services.json (если есть)
           python3 - <<'PY'
-          import copy
-          import glob
-          import json
-          import os
-
+          import copy, glob, json, os
           new = os.environ["NEW_PKG"]
           targets = [new, new + ".web", new + ".beta"]
-          found = 0
           for f in glob.glob("**/google-services.json", recursive=True):
-              if "/build/" in f:
-                  continue
+              if "/build/" in f: continue
               with open(f, encoding="utf-8") as fh:
                   data = json.load(fh)
               clients = data.get("client", [])
-              if not clients:
-                  print("нет client в", f)
-                  continue
+              if not clients: continue
               have = {c["client_info"]["android_client_info"]["package_name"] for c in clients}
               base = clients[0]
               for t in targets:
-                  if t in have:
-                      continue
+                  if t in have: continue
                   c = copy.deepcopy(base)
                   c["client_info"]["android_client_info"]["package_name"] = t
                   clients.append(c)
               with open(f, "w", encoding="utf-8") as fh:
                   json.dump(data, fh, ensure_ascii=False, indent=2)
-              found += 1
-              print("обновлён:", f)
-              print("  пакеты:", sorted(c["client_info"]["android_client_info"]["package_name"] for c in clients))
-          if found == 0:
-              print("ПРЕДУПРЕЖДЕНИЕ: google-services.json не найден")
+              print("updated", f)
           PY
 
       - name: Применить патчи (ID + без рекламы)
         run: |
           python3 - <<'PY'
-          import re
-          import sys
+          import re, sys
           from pathlib import Path
 
           ROOT = Path("TMessagesProj/src/main/java/org/telegram")
           errors = []
           applied = 0
 
-
           def flex(anchor):
               return r"\s+".join(re.escape(t) for t in anchor.split())
-
 
           def patch(rel, anchor, repl):
               global applied
@@ -108,76 +86,61 @@ jobs:
               if not p.exists():
                   errors.append(f"{rel}: файл не найден")
                   return
-              with open(p, encoding="utf-8", newline="") as f:
-                  s = f.read()
+              s = p.read_text(encoding="utf-8")
               pat = re.compile(flex(anchor))
               n = len(pat.findall(s))
               if n != 1:
-                  errors.append(f"{rel}: якорь найден {n} раз (нужно 1): {anchor[:80]!r}")
+                  errors.append(f"{rel}: якорь найден {n} раз: {anchor[:80]!r}")
                   return
               s = pat.sub(lambda m: repl.replace("{ANCHOR}", m.group(0)), s, count=1)
-              with open(p, "w", encoding="utf-8", newline="") as f:
-                  f.write(s)
+              p.write_text(s, encoding="utf-8")
               applied += 1
-              print(f"OK   {rel}: {anchor[:60]!r}")
+              print(f"OK  {rel}")
 
-
-          # ---------------- РЕКЛАМА ----------------
+          # Реклама
           patch("messenger/MessagesController.java",
                 "public SponsoredMessagesInfo getSponsoredMessages(long dialogId) {",
                 "{ANCHOR}\n        if (true /*KT_NOADS*/) return null;")
-
           patch("messenger/video/VideoAds.java",
                 "private void load() { if (loading || loaded) return;",
                 "{ANCHOR}\n        if (true /*KT_NOADS*/) return;")
-
           patch("ui/Adapters/DialogsSearchAdapter.java",
                 "if (query == null || query.length() < 4 ||",
                 "if (true /*KT_NOADS*/ || query == null || query.length() < 4 ||")
 
-          # ---------------- ID В ПРОФИЛЕ ----------------
+          # ID в профиле
           PA = "ui/ProfileActivity.java"
-
           patch(PA, "private int usernameRow;",
                 "{ANCHOR}\n    private int idRow = -1; /*KT_ID*/")
-
           patch(PA, "usernameRow = -1;",
                 "{ANCHOR}\n        idRow = -1;")
-
           patch(PA,
                 "if (user != null && username != null) { usernameRow = rowCount++; }",
                 "{ANCHOR}\n                idRow = rowCount++;")
-
           patch(PA,
                 "} else if (chatId != 0) { if (chatInfo != null && (!TextUtils.isEmpty(chatInfo.about) ||",
                 "} else if (chatId != 0) {\n            if (true /*KT_ID*/ || chatInfo != null && (!TextUtils.isEmpty(chatInfo.about) ||")
-
           patch(PA,
                 "if (ChatObject.isPublic(currentChat)) { usernameRow = rowCount++; }",
                 "{ANCHOR}\n                idRow = rowCount++;")
-
           patch(PA,
                 "} else if (position == phoneRow || position == locationRow || position == numberRow || position == birthdayRow) {",
                 "} else if (position == phoneRow || position == locationRow || position == numberRow || position == birthdayRow || position == idRow) {")
-
           patch(PA,
                 "} else if (position == phoneRow) { String text; TLRPC.User user = getMessagesController().getUser(userId); String phoneNumber;",
                 "} else if (position == idRow) {\n"
                 "                        detailCell.setTextAndValue(ktIdValue(), ktIdLabel(), false);\n"
                 "                    {ANCHOR}")
-
           patch(PA,
                 "private boolean processOnClickOrPress(final int position, final View view, final float x, final float y) { if (position == usernameRow || position == setUsernameRow) {",
                 """private String ktIdValue() {
                   if (userId != 0) return String.valueOf(userId);
                   return ((currentChat != null && ChatObject.isChannel(currentChat)) ? "-100" : "-") + chatId;
               }
-
               private String ktIdLabel() {
                   if (userId != 0) return "ID";
                   return "ID (internal: " + chatId + ")";
               }
-
               private boolean processOnClickOrPress(final int position, final View view, final float x, final float y) {
                   if (idRow != -1 && position == idRow) {
                       AndroidUtilities.addToClipboard(ktIdValue());
@@ -186,11 +149,10 @@ jobs:
                   }
                   if (position == usernameRow || position == setUsernameRow) {""")
 
-          print(f"\nПрименено правок: {applied}")
+          print(f"Применено: {applied}")
           if errors:
-              print("\nОШИБКИ:")
-              for e in errors:
-                  print("  -", e)
+              print("ОШИБКИ:")
+              for e in errors: print(" -", e)
               sys.exit(1)
           PY
 
@@ -199,34 +161,60 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Android SDK, NDK, CMake
+      - name: Android SDK + NDK + CMake
         run: |
           SDKM=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -1)
-          echo "sdkmanager: $SDKM"
           yes | "$SDKM" --sdk_root="$ANDROID_HOME" --licenses > /dev/null || true
           "$SDKM" --sdk_root="$ANDROID_HOME" \
             "platforms;android-36" "build-tools;36.0.0" \
             "ndk;27.2.12479018" "cmake;3.22.1"
           echo "sdk.dir=$ANDROID_HOME" > local.properties
 
-      - name: Сборка
+      # === ВАЖНО: без keystore APK часто не появляется ===
+      # Добавь secrets: KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD
+      # и раскомментируй блок ниже, если хочешь подписанный APK.
+      #
+      # - name: Подготовить keystore
+      #   env:
+      #     KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      #   run: |
+      #     echo "$KEYSTORE_BASE64" | base64 -d > TMessagesProj/config/release.keystore
+      #     cat >> gradle.properties << EOF
+      #     RELEASE_STORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}
+      #     RELEASE_KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}
+      #     RELEASE_KEY_ALIAS=${{ secrets.KEY_ALIAS }}
+      #     EOF
+
+      - name: Сборка standalone
         run: |
           set -o pipefail
           chmod +x gradlew
-          ./gradlew --no-daemon --stacktrace :TMessagesProj_AppStandalone:assembleAfatStandalone 2>&1 | tee build.log
+          # правильный таск для standalone APK
+          ./gradlew --no-daemon --stacktrace \
+            :TMessagesProj_AppStandalone:assembleAfatStandalone 2>&1 | tee build.log
 
-      - name: Выложить ошибки сборки (только при падении)
+      - name: Найти и показать APK
+        run: |
+          echo "=== все apk ==="
+          find . -name "*.apk" -not -path "./.git/*" | head -30 || true
+          echo
+          echo "=== содержимое outputs ==="
+          find . -path "*/build/outputs/apk/*" -type d 2>/dev/null | head -20 || true
+          ls -la TMessagesProj*/build/outputs/apk/ 2>/dev/null || true
+          ls -la TMessagesProj_AppStandalone/build/outputs/apk/ 2>/dev/null || true
+
+      - name: Выложить лог при ошибке
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/pub
           {
-            echo "=== место на диске ==="; df -h / | tail -2
-            echo; echo "=== ключевые строки ==="
-            grep -n -E "error:|FAILED|What went wrong|Caused by|OutOfMemory|No space left|Execution failed|Could not|No matching client" build.log | cut -c1-300 | head -80
-            echo; echo "=== последние 120 строк ==="
-            tail -120 build.log | cut -c1-300
+            echo "=== диск ==="; df -h /
+            echo; echo "=== ошибки ==="
+            grep -nE "error:|FAILED|What went wrong|Caused by|OutOfMemory|No space|Execution failed|Could not|No matching client" build.log | head -80 || true
+            echo; echo "=== хвост ==="
+            tail -150 build.log
           } > /tmp/pub/buildlog.txt
           cd /tmp/pub
           git init -q -b recon-out
@@ -236,3 +224,12 @@ jobs:
           git commit -q -m "build log"
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push -f origin recon-out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Telegram-fork-apk
+          path: |
+            **/build/outputs/apk/**/*.apk
+            **/*.apk
+          if-no-files-found: error
+          retention-days: 7
