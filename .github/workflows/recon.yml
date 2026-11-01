@@ -1,10 +1,13 @@
 name: Recon
 on: workflow_dispatch
+permissions:
+  contents: write
 jobs:
   recon:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+
       - name: Выдержки из кода
         run: |
           S=TMessagesProj/src/main/java/org/telegram
@@ -33,8 +36,17 @@ jobs:
 
             echo; echo "=== StarGiftSheet: addRow ==="
             grep -n "addRow(" $S/ui/Stars/StarGiftSheet.java | cut -c1-200 | head -60
-          } | tee recon2.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: recon2
-          path: recon2.txt
+          } > recon2.txt
+          wc -l recon2.txt
+
+      - name: Выложить результат в ветку recon-out
+        run: |
+          mkdir /tmp/out && cp recon2.txt /tmp/out/
+          git config user.name "recon-bot"
+          git config user.email "recon@users.noreply.github.com"
+          git checkout --orphan recon-out
+          git rm -rf . > /dev/null
+          cp /tmp/out/recon2.txt .
+          git add recon2.txt
+          git commit -m "recon output"
+          git push -f origin recon-out
