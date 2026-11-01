@@ -37,7 +37,13 @@ jobs:
             echo; echo "=== StarGiftSheet: addRow ==="
             grep -n "addRow(" $S/ui/Stars/StarGiftSheet.java | cut -c1-200 | head -60
           } > recon2.txt
-          wc -l recon2.txt
+          echo "Готово, строк в файле: $(wc -l < recon2.txt)"
+
+      - name: Вложение к запуску (запасной вариант)
+        uses: actions/upload-artifact@v4
+        with:
+          name: recon2
+          path: recon2.txt
 
       - name: Выложить результат в ветку recon-out
         run: |
@@ -50,3 +56,20 @@ jobs:
           git add recon2.txt
           git commit -m "recon output"
           git push -f origin recon-out
+
+          BLOB="https://github.com/$GITHUB_REPOSITORY/blob/recon-out/recon2.txt"
+          RAW="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/recon-out/recon2.txt"
+          BRANCH="https://github.com/$GITHUB_REPOSITORY/tree/recon-out"
+          echo "=========================================="
+          echo "Файл сохранён в ветку recon-out:"
+          echo "  Ветка:  $BRANCH"
+          echo "  Файл:   $BLOB"
+          echo "  Raw:    $RAW"
+          echo "=========================================="
+          {
+            echo "### Результат сохранён"
+            echo "- Ветка: $BRANCH"
+            echo "- Файл: $BLOB"
+            echo "- Raw (эту ссылку пришли Claude): $RAW"
+            echo "- Запасной вариант: блок Artifacts внизу этой страницы, архив recon2"
+          } >> "$GITHUB_STEP_SUMMARY"
