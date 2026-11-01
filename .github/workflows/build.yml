@@ -1,0 +1,148 @@
+name: Build Telegram fork
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build.yml'
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Применить патчи (ID + без рекламы)
+        run: |
+          python3 - <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          ROOT = Path("TMessagesProj/src/main/java/org/telegram")
+          errors = []
+          applied = 0
+
+
+          def flex(anchor):
+              return r"\s+".join(re.escape(t) for t in anchor.split())
+
+
+          def patch(rel, anchor, repl):
+              global applied
+              p = ROOT / rel
+              if not p.exists():
+                  errors.append(f"{rel}: файл не найден")
+                  return
+              with open(p, encoding="utf-8", newline="") as f:
+                  s = f.read()
+              pat = re.compile(flex(anchor))
+              n = len(pat.findall(s))
+              if n != 1:
+                  errors.append(f"{rel}: якорь найден {n} раз (нужно 1): {anchor[:80]!r}")
+                  return
+              s = pat.sub(lambda m: repl.replace("{ANCHOR}", m.group(0)), s, count=1)
+              with open(p, "w", encoding="utf-8", newline="") as f:
+                  f.write(s)
+              applied += 1
+              print(f"OK   {rel}: {anchor[:60]!r}")
+
+
+          # ---------------- РЕКЛАМА ----------------
+          patch("messenger/MessagesController.java",
+                "public SponsoredMessagesInfo getSponsoredMessages(long dialogId) {",
+                "{ANCHOR}\n        if (true /*KT_NOADS*/) return null;")
+
+          patch("messenger/video/VideoAds.java",
+                "private void load() { if (loading || loaded) return;",
+                "{ANCHOR}\n        if (true /*KT_NOADS*/) return;")
+
+          patch("ui/Adapters/DialogsSearchAdapter.java",
+                "if (query == null || query.length() < 4 ||",
+                "if (true /*KT_NOADS*/ || query == null || query.length() < 4 ||")
+
+          # ---------------- ID В ПРОФИЛЕ ----------------
+          PA = "ui/ProfileActivity.java"
+
+          patch(PA, "private int usernameRow;",
+                "{ANCHOR}\n    private int idRow = -1; /*KT_ID*/")
+
+          patch(PA, "usernameRow = -1;",
+                "{ANCHOR}\n        idRow = -1;")
+
+          patch(PA,
+                "if (user != null && username != null) { usernameRow = rowCount++; }",
+                "{ANCHOR}\n                idRow = rowCount++;")
+
+          patch(PA,
+                "} else if (chatId != 0) { if (chatInfo != null && (!TextUtils.isEmpty(chatInfo.about) ||",
+                "} else if (chatId != 0) {\n            if (true /*KT_ID*/ || chatInfo != null && (!TextUtils.isEmpty(chatInfo.about) ||")
+
+          patch(PA,
+                "if (ChatObject.isPublic(currentChat)) { usernameRow = rowCount++; }",
+                "{ANCHOR}\n                idRow = rowCount++;")
+
+          patch(PA,
+                "} else if (position == phoneRow || position == locationRow || position == numberRow || position == birthdayRow) {",
+                "} else if (position == phoneRow || position == locationRow || position == numberRow || position == birthdayRow || position == idRow) {")
+
+          patch(PA,
+                "} else if (position == phoneRow) { String text; TLRPC.User user = getMessagesController().getUser(userId); String phoneNumber;",
+                "} else if (position == idRow) {\n"
+                "                        detailCell.setTextAndValue(ktIdValue(), ktIdLabel(), false);\n"
+                "                    {ANCHOR}")
+
+          patch(PA,
+                "private boolean processOnClickOrPress(final int position, final View view, final float x, final float y) { if (position == usernameRow || position == setUsernameRow) {",
+                """private String ktIdValue() {
+                  if (userId != 0) return String.valueOf(userId);
+                  return ((currentChat != null && ChatObject.isChannel(currentChat)) ? "-100" : "-") + chatId;
+              }
+
+              private String ktIdLabel() {
+                  if (userId != 0) return "ID";
+                  return "ID (internal: " + chatId + ")";
+              }
+
+              private boolean processOnClickOrPress(final int position, final View view, final float x, final float y) {
+                  if (idRow != -1 && position == idRow) {
+                      AndroidUtilities.addToClipboard(ktIdValue());
+                      BulletinFactory.of(this).createCopyBulletin(ktIdValue(), resourcesProvider).show();
+                      return true;
+                  }
+                  if (position == usernameRow || position == setUsernameRow) {""")
+
+          print(f"\nПрименено правок: {applied}")
+          if errors:
+              print("\nОШИБКИ:")
+              for e in errors:
+                  print("  -", e)
+              sys.exit(1)
+          PY
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Android SDK, NDK, CMake
+        run: |
+          SDKM=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -1)
+          echo "sdkmanager: $SDKM"
+          yes | "$SDKM" --sdk_root="$ANDROID_HOME" --licenses > /dev/null || true
+          "$SDKM" --sdk_root="$ANDROID_HOME" \
+            "platforms;android-36" "build-tools;36.0.0" \
+            "ndk;27.2.12479018" "cmake;3.22.1"
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      - name: Сборка
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace :TMessagesProj_AppStandalone:assembleAfatStandalone
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Telegram-fork-apk
+          path: TMessagesProj_AppStandalone/build/outputs/apk/**/*.apk
+          if-no-files-found: error
