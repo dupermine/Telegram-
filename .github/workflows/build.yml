@@ -4,11 +4,18 @@ on:
   push:
     paths:
       - '.github/workflows/build.yml'
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
+      - name: Освободить место на диске
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL
+          df -h / | tail -1
+
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -36,13 +43,48 @@ jobs:
             exit 1
           fi
 
-          # разрешения и authorities в манифестах -> зависят от applicationId
           for M in $(find . -name AndroidManifest.xml -not -path "*/build/*"); do
             sed -i -E 's/android:name="org\.telegram\.messenger(\.web|\.beta)?\.permission\./android:name="${applicationId}.permission./g' "$M"
             sed -i -E 's/android:authorities="org\.telegram\.messenger(\.web|\.beta)?\./android:authorities="${applicationId}./g' "$M"
           done
           echo "--- разрешения и authorities в манифестах ---"
           grep -rn "\.permission\.\|authorities" --include=AndroidManifest.xml . | grep -v "/build/" | grep -v "android\.permission" | cut -c1-200 || true
+
+          echo "--- google-services.json: добавляем записи для нового пакета ---"
+          python3 - <<'PY'
+          import copy
+          import glob
+          import json
+          import os
+
+          new = os.environ["NEW_PKG"]
+          targets = [new, new + ".web", new + ".beta"]
+          found = 0
+          for f in glob.glob("**/google-services.json", recursive=True):
+              if "/build/" in f:
+                  continue
+              with open(f, encoding="utf-8") as fh:
+                  data = json.load(fh)
+              clients = data.get("client", [])
+              if not clients:
+                  print("нет client в", f)
+                  continue
+              have = {c["client_info"]["android_client_info"]["package_name"] for c in clients}
+              base = clients[0]
+              for t in targets:
+                  if t in have:
+                      continue
+                  c = copy.deepcopy(base)
+                  c["client_info"]["android_client_info"]["package_name"] = t
+                  clients.append(c)
+              with open(f, "w", encoding="utf-8") as fh:
+                  json.dump(data, fh, ensure_ascii=False, indent=2)
+              found += 1
+              print("обновлён:", f)
+              print("  пакеты:", sorted(c["client_info"]["android_client_info"]["package_name"] for c in clients))
+          if found == 0:
+              print("ПРЕДУПРЕЖДЕНИЕ: google-services.json не найден")
+          PY
 
       - name: Применить патчи (ID + без рекламы)
         run: |
@@ -169,11 +211,28 @@ jobs:
 
       - name: Сборка
         run: |
+          set -o pipefail
           chmod +x gradlew
-          ./gradlew --no-daemon --stacktrace :TMessagesProj_AppStandalone:assembleAfatStandalone
+          ./gradlew --no-daemon --stacktrace :TMessagesProj_AppStandalone:assembleAfatStandalone 2>&1 | tee build.log
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Telegram-fork-apk
-          path: TMessagesProj_AppStandalone/build/outputs/apk/**/*.apk
-          if-no-files-found: error
+      - name: Выложить ошибки сборки (только при падении)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/pub
+          {
+            echo "=== место на диске ==="; df -h / | tail -2
+            echo; echo "=== ключевые строки ==="
+            grep -n -E "error:|FAILED|What went wrong|Caused by|OutOfMemory|No space left|Execution failed|Could not|No matching client" build.log | cut -c1-300 | head -80
+            echo; echo "=== последние 120 строк ==="
+            tail -120 build.log | cut -c1-300
+          } > /tmp/pub/buildlog.txt
+          cd /tmp/pub
+          git init -q -b recon-out
+          git config user.name "recon-bot"
+          git config user.email "recon@users.noreply.github.com"
+          git add buildlog.txt
+          git commit -q -m "build log"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push -f origin recon-out
