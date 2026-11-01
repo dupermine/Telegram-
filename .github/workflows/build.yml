@@ -1,24 +1,20 @@
 name: Build Telegram fork
-
 on:
   workflow_dispatch:
   push:
     paths:
       - '.github/workflows/build.yml'
-
 permissions:
   contents: write
-
 jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-
     steps:
-      - name: Освободить место
+      - name: Освободить место на диске
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL
-          df -h /
+          df -h / | tail -1
 
       - uses: actions/checkout@v4
         with:
@@ -28,57 +24,667 @@ jobs:
         env:
           NEW_PKG: com.dupermine.tgfork
         run: |
+          echo "--- где упоминается APP_PACKAGE ---"
+          grep -rn "APP_PACKAGE" --include=*.properties --include=*.gradle --include=*.kts . | grep -v "/build/" | cut -c1-200 || true
+
           FILES=$(grep -rlE '^\s*(ext\.)?APP_PACKAGE\s*=' --include=*.properties --include=*.gradle --include=*.kts . | grep -v "/build/" || true)
-          echo "Файлы: $FILES"
+          echo "Файлы с определением: $FILES"
           if [ -z "$FILES" ]; then
-            echo "ОШИБКА: APP_PACKAGE не найден"
+            echo "ОШИБКА: определение APP_PACKAGE не найдено (см. список выше)"
             exit 1
           fi
           for F in $FILES; do
             perl -pi -e 's/^(\s*(?:ext\.)?APP_PACKAGE\s*=\s*)(["\x27]?)[^"\x27\r\n]+\2(\r?)$/$1$2$ENV{NEW_PKG}$2$3/' "$F"
-            grep -n "APP_PACKAGE" "$F" || true
+            echo "--- $F после замены ---"
+            grep -n "APP_PACKAGE" "$F"
           done
+          if ! grep -q "$NEW_PKG" $FILES; then
+            echo "ОШИБКА: APP_PACKAGE не заменён"
+            exit 1
+          fi
 
           for M in $(find . -name AndroidManifest.xml -not -path "*/build/*"); do
             sed -i -E 's/android:name="org\.telegram\.messenger(\.web|\.beta)?\.permission\./android:name="${applicationId}.permission./g' "$M"
             sed -i -E 's/android:authorities="org\.telegram\.messenger(\.web|\.beta)?\./android:authorities="${applicationId}./g' "$M"
           done
+          echo "--- разрешения и authorities в манифестах ---"
+          grep -rn "\.permission\.\|authorities" --include=AndroidManifest.xml . | grep -v "/build/" | grep -v "android\.permission" | cut -c1-200 || true
 
-          # google-services.json (если есть)
+          echo "--- google-services.json: добавляем записи для нового пакета ---"
           python3 - <<'PY'
-          import copy, glob, json, os
+          import copy
+          import glob
+          import json
+          import os
+
           new = os.environ["NEW_PKG"]
           targets = [new, new + ".web", new + ".beta"]
+          found = 0
           for f in glob.glob("**/google-services.json", recursive=True):
-              if "/build/" in f: continue
+              if "/build/" in f:
+                  continue
               with open(f, encoding="utf-8") as fh:
                   data = json.load(fh)
               clients = data.get("client", [])
-              if not clients: continue
+              if not clients:
+                  print("нет client в", f)
+                  continue
               have = {c["client_info"]["android_client_info"]["package_name"] for c in clients}
               base = clients[0]
               for t in targets:
-                  if t in have: continue
+                  if t in have:
+                      continue
                   c = copy.deepcopy(base)
                   c["client_info"]["android_client_info"]["package_name"] = t
                   clients.append(c)
               with open(f, "w", encoding="utf-8") as fh:
                   json.dump(data, fh, ensure_ascii=False, indent=2)
-              print("updated", f)
+              found += 1
+              print("обновлён:", f)
+              print("  пакеты:", sorted(c["client_info"]["android_client_info"]["package_name"] for c in clients))
+          if found == 0:
+              print("ПРЕДУПРЕЖДЕНИЕ: google-services.json не найден")
+          PY
+
+      - name: Добавить файлы (боты и tdata)
+        run: |
+          python3 - <<'PY'
+          import os
+          ROOT = "TMessagesProj/src/main/java/org/telegram"
+          os.makedirs(f"{ROOT}/messenger/bots", exist_ok=True)
+          os.makedirs(f"{ROOT}/messenger/tdimport", exist_ok=True)
+
+          files = {}
+
+          files[f"{ROOT}/messenger/bots/BotApiClient.java"] = r'''
+package org.telegram.messenger.bots;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLConnection;
+import java.net.URLEncoder;
+
+/** Прямые вызовы Telegram Bot API (api.telegram.org). */
+public class BotApiClient {
+
+    public static class ApiException extends Exception {
+        public ApiException(String m) { super(m); }
+    }
+
+    private final String token;
+
+    public BotApiClient(String token) {
+        this.token = token;
+    }
+
+    private String base() {
+        return "https://api.telegram.org/bot" + token + "/";
+    }
+
+    public JSONObject getMe() throws Exception {
+        return call("getMe", null, 15000);
+    }
+
+    public JSONArray getUpdates(long offset, int timeoutSec) throws Exception {
+        JSONObject params = new JSONObject();
+        params.put("offset", offset);
+        params.put("timeout", timeoutSec);
+        params.put("allowed_updates", new JSONArray().put("message").put("edited_message").put("callback_query"));
+        JSONObject res = call("getUpdates", params, (timeoutSec + 10) * 1000);
+        return res.getJSONArray("result");
+    }
+
+    public JSONObject sendMessage(long chatId, String text, Long replyToMessageId) throws Exception {
+        JSONObject params = new JSONObject();
+        params.put("chat_id", chatId);
+        params.put("text", text);
+        if (replyToMessageId != null) params.put("reply_to_message_id", replyToMessageId);
+        return call("sendMessage", params, 20000);
+    }
+
+    public JSONObject sendPhoto(long chatId, String filePath, String caption) throws Exception {
+        String boundary = "----KTBoundary" + System.currentTimeMillis();
+        URL url = new URL(base() + "sendPhoto");
+        HttpURLConnection c = (HttpURLConnection) url.openConnection();
+        c.setDoOutput(true);
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(30000);
+        c.setRequestMethod("POST");
+        c.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+        try (OutputStream os = c.getOutputStream()) {
+            writeField(os, boundary, "chat_id", String.valueOf(chatId));
+            if (caption != null) writeField(os, boundary, "caption", caption);
+            writeFileField(os, boundary, "photo", filePath);
+            os.write(("--" + boundary + "--\r\n").getBytes("UTF-8"));
+        }
+        return readJson(c);
+    }
+
+    private void writeField(OutputStream os, String boundary, String name, String value) throws Exception {
+        os.write(("--" + boundary + "\r\n").getBytes("UTF-8"));
+        os.write(("Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n").getBytes("UTF-8"));
+        os.write((value + "\r\n").getBytes("UTF-8"));
+    }
+
+    private void writeFileField(OutputStream os, String boundary, String name, String path) throws Exception {
+        java.io.File f = new java.io.File(path);
+        os.write(("--" + boundary + "\r\n").getBytes("UTF-8"));
+        os.write(("Content-Disposition: form-data; name=\"" + name + "\"; filename=\"" + f.getName() + "\"\r\n").getBytes("UTF-8"));
+        os.write("Content-Type: application/octet-stream\r\n\r\n".getBytes("UTF-8"));
+        try (InputStream in = new java.io.FileInputStream(f)) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
+        }
+        os.write("\r\n".getBytes("UTF-8"));
+    }
+
+    private JSONObject call(String method, JSONObject params, int timeoutMs) throws Exception {
+        StringBuilder q = new StringBuilder();
+        if (params != null) {
+            java.util.Iterator<String> it = params.keys();
+            boolean first = true;
+            while (it.hasNext()) {
+                String k = it.next();
+                if (!first) q.append('&');
+                first = false;
+                q.append(URLEncoder.encode(k, "UTF-8")).append('=')
+                 .append(URLEncoder.encode(String.valueOf(params.get(k)), "UTF-8"));
+            }
+        }
+        URL url = new URL(base() + method + (q.length() > 0 ? "?" + q : ""));
+        HttpURLConnection c = (HttpURLConnection) url.openConnection();
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(timeoutMs);
+        return readJson(c);
+    }
+
+    private JSONObject readJson(URLConnection c) throws Exception {
+        InputStream in = ((HttpURLConnection) c).getResponseCode() >= 400
+                ? ((HttpURLConnection) c).getErrorStream() : c.getInputStream();
+        ByteArrayOutputStream bo = new ByteArrayOutputStream();
+        byte[] buf = new byte[4096];
+        int n;
+        while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+        JSONObject res = new JSONObject(bo.toString("UTF-8"));
+        if (!res.optBoolean("ok", false)) {
+            throw new ApiException(res.optString("description", "Bot API error"));
+        }
+        return res;
+    }
+}
+'''
+
+          files[f"{ROOT}/messenger/bots/BotAccount.java"] = r'''
+package org.telegram.messenger.bots;
+
+public class BotAccount {
+    public String token;
+    public long botId;
+    public String username;
+    public String firstName;
+    public long updatesOffset;
+
+    public BotAccount() {}
+
+    public BotAccount(String token, long botId, String username, String firstName) {
+        this.token = token;
+        this.botId = botId;
+        this.username = username;
+        this.firstName = firstName;
+    }
+}
+'''
+
+          files[f"{ROOT}/messenger/bots/BotAccountsStore.java"] = r'''
+package org.telegram.messenger.bots;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class BotAccountsStore {
+
+    private static SharedPreferences prefs(Context c) {
+        return c.getSharedPreferences("kt_bot_accounts", Context.MODE_PRIVATE);
+    }
+
+    public static List<BotAccount> load(Context c) {
+        List<BotAccount> out = new ArrayList<>();
+        try {
+            JSONArray arr = new JSONArray(prefs(c).getString("list", "[]"));
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.getJSONObject(i);
+                BotAccount b = new BotAccount(
+                        o.getString("token"), o.getLong("id"),
+                        o.optString("username", ""), o.optString("first_name", ""));
+                b.updatesOffset = o.optLong("offset", 0);
+                out.add(b);
+            }
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    public static void save(Context c, List<BotAccount> list) {
+        JSONArray arr = new JSONArray();
+        try {
+            for (BotAccount b : list) {
+                JSONObject o = new JSONObject();
+                o.put("token", b.token);
+                o.put("id", b.botId);
+                o.put("username", b.username);
+                o.put("first_name", b.firstName);
+                o.put("offset", b.updatesOffset);
+                arr.put(o);
+            }
+        } catch (Exception ignored) {}
+        prefs(c).edit().putString("list", arr.toString()).apply();
+    }
+
+    public static void add(Context c, BotAccount b) {
+        List<BotAccount> list = load(c);
+        for (BotAccount x : list) if (x.botId == b.botId) { list.remove(x); break; }
+        list.add(b);
+        save(c, list);
+    }
+
+    public static void remove(Context c, long botId) {
+        List<BotAccount> list = load(c);
+        list.removeIf(x -> x.botId == botId);
+        save(c, list);
+    }
+
+    public static void updateOffset(Context c, long botId, long offset) {
+        List<BotAccount> list = load(c);
+        for (BotAccount b : list) {
+            if (b.botId == botId) { b.updatesOffset = offset; break; }
+        }
+        save(c, list);
+    }
+}
+'''
+
+          files[f"{ROOT}/messenger/bots/BotPollingService.java"] = r'''
+package org.telegram.messenger.bots;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.Service;
+import android.content.Intent;
+import android.os.Build;
+import android.os.IBinder;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+public class BotPollingService extends Service {
+
+    private static final ExecutorService EXEC = Executors.newCachedThreadPool();
+    private volatile boolean running = false;
+
+    public interface Listener {
+        void onBotMessage(long botId, JSONObject message);
+    }
+
+    private static Listener listener;
+    public static void setListener(Listener l) { listener = l; }
+
+    @Override
+    public IBinder onBind(Intent intent) { return null; }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            nm.createNotificationChannel(new NotificationChannel("kt_bots", "Боты", NotificationManager.IMPORTANCE_LOW));
+            Notification n = new Notification.Builder(this, "kt_bots")
+                    .setSmallIcon(android.R.drawable.ic_dialog_email)
+                    .setContentTitle("Боты подключены")
+                    .build();
+            startForeground(777, n);
+        }
+        running = true;
+        for (BotAccount b : BotAccountsStore.load(this)) startPolling(b);
+        return START_STICKY;
+    }
+
+    @Override
+    public void onDestroy() { running = false; super.onDestroy(); }
+
+    private void startPolling(BotAccount acc) {
+        EXEC.execute(() -> {
+            BotApiClient api = new BotApiClient(acc.token);
+            long offset = acc.updatesOffset;
+            while (running) {
+                try {
+                    JSONArray updates = api.getUpdates(offset, 25);
+                    for (int i = 0; i < updates.length(); i++) {
+                        JSONObject upd = updates.getJSONObject(i);
+                        offset = upd.getLong("update_id") + 1;
+                        JSONObject msg = upd.optJSONObject("message");
+                        if (msg != null && listener != null) {
+                            listener.onBotMessage(acc.botId, msg);
+                        }
+                    }
+                    if (updates.length() > 0) {
+                        BotAccountsStore.updateOffset(this, acc.botId, offset);
+                    }
+                } catch (Exception e) {
+                    try { Thread.sleep(5000); } catch (InterruptedException ignored) {}
+                }
+            }
+        });
+    }
+}
+'''
+
+          files[f"{ROOT}/messenger/tdimport/TDataImporter.java"] = r'''
+package org.telegram.messenger.tdimport;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
+
+/**
+ * ЭКСПЕРИМЕНТАЛЬНО. Разбор локального хранилища Telegram Desktop (tdata)
+ * для аккаунтов БЕЗ локального пароля Desktop. Код не проверялся на
+ * реальных файлах tdata — перед использованием с основным аккаунтом
+ * протестируйте на второстепенном.
+ */
+public class TDataImporter {
+
+    public static class Account {
+        public long userId;
+        public int dcId;
+        public byte[] authKey;
+    }
+
+    public static class ImportException extends Exception {
+        public ImportException(String m) { super(m); }
+        public ImportException(String m, Throwable t) { super(m, t); }
+    }
+
+    public static File extractZip(File zipFile, File outDir) throws ImportException {
+        try {
+            outDir.mkdirs();
+            try (ZipInputStream zis = new ZipInputStream(new FileInputStream(zipFile))) {
+                ZipEntry e;
+                byte[] buf = new byte[8192];
+                while ((e = zis.getNextEntry()) != null) {
+                    if (e.isDirectory()) continue;
+                    String name = e.getName().replace('\\', '/');
+                    File out = new File(outDir, name);
+                    out.getParentFile().mkdirs();
+                    try (java.io.FileOutputStream fos = new java.io.FileOutputStream(out)) {
+                        int n;
+                        while ((n = zis.read(buf)) > 0) fos.write(buf, 0, n);
+                    }
+                }
+            }
+            File found = findTDataRoot(outDir);
+            if (found == null) throw new ImportException("В архиве не найдена папка tdata (файл key_data не обнаружен)");
+            return found;
+        } catch (ImportException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ImportException("Не удалось распаковать архив", e);
+        }
+    }
+
+    private static File findTDataRoot(File dir) {
+        File[] list = dir.listFiles();
+        if (list == null) return null;
+        for (File f : list) {
+            if (f.isFile() && (f.getName().equals("key_data") || f.getName().equals("key_datas"))) {
+                return dir;
+            }
+        }
+        for (File f : list) {
+            if (f.isDirectory()) {
+                File r = findTDataRoot(f);
+                if (r != null) return r;
+            }
+        }
+        return null;
+    }
+
+    public static List<Account> importAccounts(File tdataDir) throws ImportException {
+        try {
+            File keyFile = new File(tdataDir, "key_data");
+            if (!keyFile.exists()) keyFile = new File(tdataDir, "key_datas");
+            if (!keyFile.exists()) throw new ImportException("Файл key_data не найден");
+
+            byte[] raw = readAll(keyFile);
+            if (raw.length < 24 || raw[0] != 'T' || raw[1] != 'D' || raw[2] != 'F' || raw[3] != '$') {
+                throw new ImportException("Неожиданный формат key_data (не TDF$). Эта версия Telegram Desktop пока не поддерживается.");
+            }
+            byte[] payload = java.util.Arrays.copyOfRange(raw, 8, raw.length - 16);
+
+            QReader r = new QReader(payload);
+            byte[] salt = r.readByteArray();
+            byte[] keyEncrypted = r.readByteArray();
+            byte[] localKey = createLocalKey(salt, new byte[0], 1);
+            byte[] keyDecrypted = decryptLocal(keyEncrypted, localKey);
+            if (keyDecrypted == null) {
+                throw new ImportException("Не удалось расшифровать key_data: похоже, на Desktop установлен локальный пароль — импорт такого аккаунта пока не поддерживается.");
+            }
+
+            byte[] mainLocalKey = java.util.Arrays.copyOf(keyDecrypted, 256);
+
+            File mapFile = new File(tdataDir, "map0");
+            if (!mapFile.exists()) mapFile = new File(tdataDir, "map1");
+            if (!mapFile.exists()) throw new ImportException("Файл map0/map1 не найден");
+
+            byte[] mapRaw = readAll(mapFile);
+            if (mapRaw.length < 24 || mapRaw[0] != 'T' || mapRaw[1] != 'D' || mapRaw[2] != 'F' || mapRaw[3] != '$') {
+                throw new ImportException("Неожиданный формат map0 (не TDF$)");
+            }
+            byte[] mapPayload = java.util.Arrays.copyOfRange(mapRaw, 8, mapRaw.length - 16);
+            byte[] mapDecrypted = decryptLocal(mapPayload, mainLocalKey);
+            if (mapDecrypted == null) {
+                throw new ImportException("Не удалось расшифровать map0 основным ключом");
+            }
+
+            List<Account> result = new ArrayList<>();
+            QReader mr = new QReader(mapDecrypted);
+            while (mr.hasMore(4)) {
+                int tag = mr.tryReadTag();
+                if (tag == TAG_MTP_AUTHORIZATION) {
+                    byte[] authBlock = mr.readByteArray();
+                    QReader ar = new QReader(authBlock);
+                    int userId32 = ar.readInt32();
+                    int mainDc = ar.readInt32();
+                    int count = ar.readInt32();
+                    for (int i = 0; i < count; i++) {
+                        int dcId = ar.readInt32();
+                        byte[] key = ar.readFixed(256);
+                        Account acc = new Account();
+                        acc.userId = userId32 & 0xFFFFFFFFL;
+                        acc.dcId = dcId;
+                        acc.authKey = key;
+                        result.add(acc);
+                    }
+                    break;
+                }
+            }
+            if (result.isEmpty()) {
+                throw new ImportException("Авторизация не найдена в map0 (формат файла не распознан)");
+            }
+            return result;
+        } catch (ImportException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ImportException("Ошибка разбора tdata: " + e.getMessage(), e);
+        }
+    }
+
+    private static final int TAG_MTP_AUTHORIZATION = 0x4D544150;
+
+    private static byte[] createLocalKey(byte[] salt, byte[] passcode, int iterations) throws Exception {
+        MessageDigest sha512 = MessageDigest.getInstance("SHA-512");
+        sha512.update(salt);
+        sha512.update(passcode);
+        sha512.update(salt);
+        byte[] hashKey = sha512.digest();
+
+        javax.crypto.spec.PBEKeySpec spec = new javax.crypto.spec.PBEKeySpec(
+                bytesToChars(hashKey), salt, iterations, 256 * 8);
+        javax.crypto.SecretKeyFactory f = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA512");
+        return f.generateSecret(spec).getEncoded();
+    }
+
+    private static char[] bytesToChars(byte[] b) {
+        char[] c = new char[b.length];
+        for (int i = 0; i < b.length; i++) c[i] = (char) (b[i] & 0xFF);
+        return c;
+    }
+
+    private static byte[] decryptLocal(byte[] encrypted, byte[] localKey) throws Exception {
+        if (encrypted.length < 16) return null;
+        byte[] msgKey = java.util.Arrays.copyOfRange(encrypted, 0, 16);
+        byte[] data = java.util.Arrays.copyOfRange(encrypted, 16, encrypted.length);
+
+        int x = 8;
+        MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
+        sha1.update(msgKey); sha1.update(localKey, x, 32);
+        byte[] sha1a = sha1.digest();
+        sha1.reset();
+        sha1.update(localKey, 32 + x, 16); sha1.update(msgKey); sha1.update(localKey, 48 + x, 16);
+        byte[] sha1b = sha1.digest();
+        sha1.reset();
+        sha1.update(localKey, 64 + x, 32); sha1.update(msgKey);
+        byte[] sha1c = sha1.digest();
+        sha1.reset();
+        sha1.update(msgKey); sha1.update(localKey, 96 + x, 32);
+        byte[] sha1d = sha1.digest();
+
+        byte[] aesKey = concat(slice(sha1a, 0, 8), slice(sha1b, 8, 20), slice(sha1c, 4, 16));
+        byte[] aesIv = concat(slice(sha1a, 8, 20), slice(sha1b, 0, 8), slice(sha1c, 16, 20), slice(sha1d, 0, 8));
+
+        byte[] decrypted = aesIgeDecrypt(data, aesKey, aesIv);
+
+        MessageDigest sha1chk = MessageDigest.getInstance("SHA-1");
+        byte[] check = sha1chk.digest(decrypted);
+        byte[] checkShort = java.util.Arrays.copyOf(check, 16);
+        if (!java.util.Arrays.equals(checkShort, msgKey)) {
+            return null;
+        }
+        int len = ByteBuffer.wrap(decrypted, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+        if (len < 0 || len > decrypted.length - 4) return null;
+        return java.util.Arrays.copyOfRange(decrypted, 4, 4 + len);
+    }
+
+    private static byte[] aesIgeDecrypt(byte[] data, byte[] key, byte[] iv) throws Exception {
+        byte[] ivPrev = java.util.Arrays.copyOfRange(iv, 0, 16);
+        byte[] ivCur = java.util.Arrays.copyOfRange(iv, 16, 32);
+        Cipher cipher = Cipher.getInstance("AES/ECB/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        for (int i = 0; i < data.length; i += 16) {
+            byte[] block = java.util.Arrays.copyOfRange(data, i, i + 16);
+            byte[] x = xor(block, ivCur);
+            byte[] y = cipher.doFinal(x);
+            byte[] plain = xor(y, ivPrev);
+            out.write(plain);
+            ivPrev = block;
+            ivCur = plain;
+        }
+        return out.toByteArray();
+    }
+
+    private static byte[] xor(byte[] a, byte[] b) {
+        byte[] r = new byte[a.length];
+        for (int i = 0; i < a.length; i++) r[i] = (byte) (a[i] ^ b[i]);
+        return r;
+    }
+
+    private static byte[] slice(byte[] a, int from, int to) {
+        return java.util.Arrays.copyOfRange(a, from, to);
+    }
+
+    private static byte[] concat(byte[]... parts) {
+        int len = 0;
+        for (byte[] p : parts) len += p.length;
+        byte[] r = new byte[len];
+        int pos = 0;
+        for (byte[] p : parts) { System.arraycopy(p, 0, r, pos, p.length); pos += p.length; }
+        return r;
+    }
+
+    private static byte[] readAll(File f) throws Exception {
+        try (FileInputStream in = new FileInputStream(f)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            return out.toByteArray();
+        }
+    }
+
+    private static class QReader {
+        private final ByteBuffer buf;
+        QReader(byte[] data) { buf = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN); }
+        boolean hasMore(int n) { return buf.remaining() >= n; }
+        int readInt32() { return buf.getInt(); }
+        int tryReadTag() { return buf.getInt(); }
+        byte[] readFixed(int n) { byte[] b = new byte[n]; buf.get(b); return b; }
+        byte[] readByteArray() {
+            int len = buf.getInt();
+            if (len < 0) return new byte[0];
+            byte[] b = new byte[len];
+            buf.get(b);
+            return b;
+        }
+    }
+}
+'''
+
+          for path, content in files.items():
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(content)
+              print("создан:", path, len(content), "байт")
           PY
 
       - name: Применить патчи (ID + без рекламы)
         run: |
           python3 - <<'PY'
-          import re, sys
+          import re
+          import sys
           from pathlib import Path
 
           ROOT = Path("TMessagesProj/src/main/java/org/telegram")
           errors = []
           applied = 0
 
+
           def flex(anchor):
               return r"\s+".join(re.escape(t) for t in anchor.split())
+
 
           def patch(rel, anchor, repl):
               global applied
@@ -86,61 +692,76 @@ jobs:
               if not p.exists():
                   errors.append(f"{rel}: файл не найден")
                   return
-              s = p.read_text(encoding="utf-8")
+              with open(p, encoding="utf-8", newline="") as f:
+                  s = f.read()
               pat = re.compile(flex(anchor))
               n = len(pat.findall(s))
               if n != 1:
-                  errors.append(f"{rel}: якорь найден {n} раз: {anchor[:80]!r}")
+                  errors.append(f"{rel}: якорь найден {n} раз (нужно 1): {anchor[:80]!r}")
                   return
               s = pat.sub(lambda m: repl.replace("{ANCHOR}", m.group(0)), s, count=1)
-              p.write_text(s, encoding="utf-8")
+              with open(p, "w", encoding="utf-8", newline="") as f:
+                  f.write(s)
               applied += 1
-              print(f"OK  {rel}")
+              print(f"OK   {rel}: {anchor[:60]!r}")
 
-          # Реклама
+
+          # ---------------- РЕКЛАМА ----------------
           patch("messenger/MessagesController.java",
                 "public SponsoredMessagesInfo getSponsoredMessages(long dialogId) {",
                 "{ANCHOR}\n        if (true /*KT_NOADS*/) return null;")
+
           patch("messenger/video/VideoAds.java",
                 "private void load() { if (loading || loaded) return;",
                 "{ANCHOR}\n        if (true /*KT_NOADS*/) return;")
+
           patch("ui/Adapters/DialogsSearchAdapter.java",
                 "if (query == null || query.length() < 4 ||",
                 "if (true /*KT_NOADS*/ || query == null || query.length() < 4 ||")
 
-          # ID в профиле
+          # ---------------- ID В ПРОФИЛЕ ----------------
           PA = "ui/ProfileActivity.java"
+
           patch(PA, "private int usernameRow;",
                 "{ANCHOR}\n    private int idRow = -1; /*KT_ID*/")
+
           patch(PA, "usernameRow = -1;",
                 "{ANCHOR}\n        idRow = -1;")
+
           patch(PA,
                 "if (user != null && username != null) { usernameRow = rowCount++; }",
                 "{ANCHOR}\n                idRow = rowCount++;")
+
           patch(PA,
                 "} else if (chatId != 0) { if (chatInfo != null && (!TextUtils.isEmpty(chatInfo.about) ||",
                 "} else if (chatId != 0) {\n            if (true /*KT_ID*/ || chatInfo != null && (!TextUtils.isEmpty(chatInfo.about) ||")
+
           patch(PA,
                 "if (ChatObject.isPublic(currentChat)) { usernameRow = rowCount++; }",
                 "{ANCHOR}\n                idRow = rowCount++;")
+
           patch(PA,
                 "} else if (position == phoneRow || position == locationRow || position == numberRow || position == birthdayRow) {",
                 "} else if (position == phoneRow || position == locationRow || position == numberRow || position == birthdayRow || position == idRow) {")
+
           patch(PA,
                 "} else if (position == phoneRow) { String text; TLRPC.User user = getMessagesController().getUser(userId); String phoneNumber;",
                 "} else if (position == idRow) {\n"
                 "                        detailCell.setTextAndValue(ktIdValue(), ktIdLabel(), false);\n"
                 "                    {ANCHOR}")
+
           patch(PA,
                 "private boolean processOnClickOrPress(final int position, final View view, final float x, final float y) { if (position == usernameRow || position == setUsernameRow) {",
                 """private String ktIdValue() {
                   if (userId != 0) return String.valueOf(userId);
                   return ((currentChat != null && ChatObject.isChannel(currentChat)) ? "-100" : "-") + chatId;
               }
+
               private String ktIdLabel() {
                   if (userId != 0) return "ID";
                   return "ID (internal: " + chatId + ")";
               }
+
               private boolean processOnClickOrPress(final int position, final View view, final float x, final float y) {
                   if (idRow != -1 && position == idRow) {
                       AndroidUtilities.addToClipboard(ktIdValue());
@@ -149,10 +770,11 @@ jobs:
                   }
                   if (position == usernameRow || position == setUsernameRow) {""")
 
-          print(f"Применено: {applied}")
+          print(f"\nПрименено правок: {applied}")
           if errors:
-              print("ОШИБКИ:")
-              for e in errors: print(" -", e)
+              print("\nОШИБКИ:")
+              for e in errors:
+                  print("  -", e)
               sys.exit(1)
           PY
 
@@ -161,60 +783,34 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Android SDK + NDK + CMake
+      - name: Android SDK, NDK, CMake
         run: |
           SDKM=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -1)
+          echo "sdkmanager: $SDKM"
           yes | "$SDKM" --sdk_root="$ANDROID_HOME" --licenses > /dev/null || true
           "$SDKM" --sdk_root="$ANDROID_HOME" \
             "platforms;android-36" "build-tools;36.0.0" \
             "ndk;27.2.12479018" "cmake;3.22.1"
           echo "sdk.dir=$ANDROID_HOME" > local.properties
 
-      # === ВАЖНО: без keystore APK часто не появляется ===
-      # Добавь secrets: KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD
-      # и раскомментируй блок ниже, если хочешь подписанный APK.
-      #
-      # - name: Подготовить keystore
-      #   env:
-      #     KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-      #   run: |
-      #     echo "$KEYSTORE_BASE64" | base64 -d > TMessagesProj/config/release.keystore
-      #     cat >> gradle.properties << EOF
-      #     RELEASE_STORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}
-      #     RELEASE_KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}
-      #     RELEASE_KEY_ALIAS=${{ secrets.KEY_ALIAS }}
-      #     EOF
-
-      - name: Сборка standalone
+      - name: Сборка
         run: |
           set -o pipefail
           chmod +x gradlew
-          # правильный таск для standalone APK
-          ./gradlew --no-daemon --stacktrace \
-            :TMessagesProj_AppStandalone:assembleAfatStandalone 2>&1 | tee build.log
+          ./gradlew --no-daemon --stacktrace :TMessagesProj_AppStandalone:assembleAfatStandalone 2>&1 | tee build.log
 
-      - name: Найти и показать APK
-        run: |
-          echo "=== все apk ==="
-          find . -name "*.apk" -not -path "./.git/*" | head -30 || true
-          echo
-          echo "=== содержимое outputs ==="
-          find . -path "*/build/outputs/apk/*" -type d 2>/dev/null | head -20 || true
-          ls -la TMessagesProj*/build/outputs/apk/ 2>/dev/null || true
-          ls -la TMessagesProj_AppStandalone/build/outputs/apk/ 2>/dev/null || true
-
-      - name: Выложить лог при ошибке
+      - name: Выложить ошибки сборки (только при падении)
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/pub
           {
-            echo "=== диск ==="; df -h /
-            echo; echo "=== ошибки ==="
-            grep -nE "error:|FAILED|What went wrong|Caused by|OutOfMemory|No space|Execution failed|Could not|No matching client" build.log | head -80 || true
-            echo; echo "=== хвост ==="
-            tail -150 build.log
+            echo "=== место на диске ==="; df -h / | tail -2
+            echo; echo "=== ключевые строки ==="
+            grep -n -E "error:|FAILED|What went wrong|Caused by|OutOfMemory|No space left|Execution failed|Could not|No matching client" build.log | cut -c1-300 | head -80
+            echo; echo "=== последние 120 строк ==="
+            tail -120 build.log | cut -c1-300
           } > /tmp/pub/buildlog.txt
           cd /tmp/pub
           git init -q -b recon-out
@@ -224,12 +820,15 @@ jobs:
           git commit -q -m "build log"
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push -f origin recon-out
+          RAW="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/recon-out/buildlog.txt"
+          echo "Лог ошибки: $RAW"
+          echo "- Лог ошибки (пришли Claude): $RAW" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Показать найденные APK
+        run: find . -name "*.apk" -not -path "./.git/*" | head -20
 
       - uses: actions/upload-artifact@v4
         with:
           name: Telegram-fork-apk
-          path: |
-            **/build/outputs/apk/**/*.apk
-            **/*.apk
+          path: "**/build/outputs/apk/**/*.apk"
           if-no-files-found: error
-          retention-days: 7
