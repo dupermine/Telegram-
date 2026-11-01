@@ -1,0 +1,36 @@
+name: Recon
+on: workflow_dispatch
+jobs:
+  recon:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Поиск по коду
+        run: |
+          S=TMessagesProj/src/main/java
+          P=$S/org/telegram/ui/ProfileActivity.java
+          {
+            echo "### Размеры ключевых файлов"
+            wc -l $P $S/org/telegram/ui/ChatActivity.java $S/org/telegram/messenger/MessagesController.java 2>&1
+
+            echo; echo "### Реклама: файлы"
+            grep -rli "sponsored" $S --include=*.java | head -40
+            echo; echo "### Реклама: запросы"
+            grep -rn "getSponsoredMessages\|TL_sponsoredMessage\b\|getSponsoredPeers" $S --include=*.java | cut -c1-220 | head -60
+
+            echo; echo "### Профиль: строки (rows)"
+            grep -n "usernameRow\|userInfoRow\|bioRow\|phoneRow\|numberRow\|idRow" $P | cut -c1-200 | head -80
+
+            echo; echo "### Профиль: где заполняются подписи"
+            grep -n "LocaleController.getString(R.string.Username\|R.string.PhoneMobile\|R.string.UserBio\|R.string.Username)" $P | cut -c1-220 | head -30
+
+            echo; echo "### Подарки: файлы"
+            find $S -iname "*Gift*.java" | head -60
+            echo; echo "### Подарки: уникальные (NFT)"
+            grep -rln "StarGiftUnique" $S --include=*.java | head -30
+            grep -rn "\.slug" $S --include=*Gift*.java | cut -c1-200 | head -30
+          } | tee recon.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recon
+          path: recon.txt
