@@ -17,17 +17,26 @@ jobs:
         env:
           NEW_PKG: com.dupermine.tgfork
         run: |
-          echo "--- applicationId до замены ---"
-          grep -rn "applicationId" --include=build.gradle --include=build.gradle.kts . | grep -v "/build/" | cut -c1-200 || true
-          F=$(ls TMessagesProj_AppStandalone/build.gradle* | head -1)
-          echo "Файл: $F"
-          perl -pi -e 's/(applicationId\s*=?\s*)(["\x27])[^"\x27]+\2/$1$2$ENV{NEW_PKG}$2/' "$F"
-          echo "--- после ---"
-          grep -n "applicationId" "$F" || true
-          if ! grep -q "$NEW_PKG" "$F"; then
-            echo "ОШИБКА: applicationId не заменён в $F (см. список выше)"
+          echo "--- где упоминается APP_PACKAGE ---"
+          grep -rn "APP_PACKAGE" --include=*.properties --include=*.gradle --include=*.kts . | grep -v "/build/" | cut -c1-200 || true
+
+          FILES=$(grep -rlE '^\s*(ext\.)?APP_PACKAGE\s*=' --include=*.properties --include=*.gradle --include=*.kts . | grep -v "/build/" || true)
+          echo "Файлы с определением: $FILES"
+          if [ -z "$FILES" ]; then
+            echo "ОШИБКА: определение APP_PACKAGE не найдено (см. список выше)"
             exit 1
           fi
+          for F in $FILES; do
+            perl -pi -e 's/^(\s*(?:ext\.)?APP_PACKAGE\s*=\s*)(["\x27]?)[^"\x27\r\n]+\2(\r?)$/$1$2$ENV{NEW_PKG}$2$3/' "$F"
+            echo "--- $F после замены ---"
+            grep -n "APP_PACKAGE" "$F"
+          done
+          if ! grep -q "$NEW_PKG" $FILES; then
+            echo "ОШИБКА: APP_PACKAGE не заменён"
+            exit 1
+          fi
+
+          # разрешения и authorities в манифестах -> зависят от applicationId
           for M in $(find . -name AndroidManifest.xml -not -path "*/build/*"); do
             sed -i -E 's/android:name="org\.telegram\.messenger(\.web|\.beta)?\.permission\./android:name="${applicationId}.permission./g' "$M"
             sed -i -E 's/android:authorities="org\.telegram\.messenger(\.web|\.beta)?\./android:authorities="${applicationId}./g' "$M"
