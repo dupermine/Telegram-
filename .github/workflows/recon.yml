@@ -5,32 +5,36 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Поиск по коду
+      - name: Выдержки из кода
         run: |
-          S=TMessagesProj/src/main/java
-          P=$S/org/telegram/ui/ProfileActivity.java
+          S=TMessagesProj/src/main/java/org/telegram
+          show() { echo; echo "=== $(basename $1) $2-$3 ==="; awk -v a=$2 -v b=$3 'NR>=a && NR<=b {print NR": "substr($0,1,200)}' "$1"; }
           {
-            echo "### Размеры ключевых файлов"
-            wc -l $P $S/org/telegram/ui/ChatActivity.java $S/org/telegram/messenger/MessagesController.java 2>&1
+            PA=$S/ui/ProfileActivity.java
+            show $PA 7325 7340
+            show $PA 7440 7480
+            show $PA 10498 10512
+            show $PA 10560 10575
+            show $PA 10660 10680
+            show $PA 10745 10775
+            show $PA 10880 10930
+            show $PA 13538 13565
+            show $PA 13575 13612
+            show $PA 14370 14385
 
-            echo; echo "### Реклама: файлы"
-            grep -rli "sponsored" $S --include=*.java | head -40
-            echo; echo "### Реклама: запросы"
-            grep -rn "getSponsoredMessages\|TL_sponsoredMessage\b\|getSponsoredPeers" $S --include=*.java | cut -c1-220 | head -60
+            show $S/messenger/MessagesController.java 21660 21770
+            CA=$S/ui/ChatActivity.java
+            show $CA 25205 25235
+            show $CA 25260 25290
+            show $CA 26188 26200
+            show $CA 26540 26560
+            show $S/messenger/video/VideoAds.java 195 215
+            show $S/ui/Adapters/DialogsSearchAdapter.java 1125 1160
 
-            echo; echo "### Профиль: строки (rows)"
-            grep -n "usernameRow\|userInfoRow\|bioRow\|phoneRow\|numberRow\|idRow" $P | cut -c1-200 | head -80
-
-            echo; echo "### Профиль: где заполняются подписи"
-            grep -n "LocaleController.getString(R.string.Username\|R.string.PhoneMobile\|R.string.UserBio\|R.string.Username)" $P | cut -c1-220 | head -30
-
-            echo; echo "### Подарки: файлы"
-            find $S -iname "*Gift*.java" | head -60
-            echo; echo "### Подарки: уникальные (NFT)"
-            grep -rln "StarGiftUnique" $S --include=*.java | head -30
-            grep -rn "\.slug" $S --include=*Gift*.java | cut -c1-200 | head -30
-          } | tee recon.txt
+            echo; echo "=== StarGiftSheet: addRow ==="
+            grep -n "addRow(" $S/ui/Stars/StarGiftSheet.java | cut -c1-200 | head -60
+          } | tee recon2.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: recon
-          path: recon.txt
+          name: recon2
+          path: recon2.txt
