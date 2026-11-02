@@ -8,68 +8,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Выдержки из кода
+      - name: Поиск по LoginActivity
         run: |
-          S=TMessagesProj/src/main/java/org/telegram
-          show() { echo; echo "=== $(basename $1) $2-$3 ==="; awk -v a=$2 -v b=$3 'NR>=a && NR<=b {print NR": "substr($0,1,200)}' "$1"; }
+          S=TMessagesProj/src/main/java/org/telegram/ui/LoginActivity.java
           {
-            PA=$S/ui/ProfileActivity.java
-            show $PA 7325 7340
-            show $PA 7440 7480
-            show $PA 10498 10512
-            show $PA 10560 10575
-            show $PA 10660 10680
-            show $PA 10745 10775
-            show $PA 10880 10930
-            show $PA 13538 13565
-            show $PA 13575 13612
-            show $PA 14370 14385
+            echo "=== размер файла ==="
+            wc -l "$S"
 
-            show $S/messenger/MessagesController.java 21660 21770
-            CA=$S/ui/ChatActivity.java
-            show $CA 25205 25235
-            show $CA 25260 25290
-            show $CA 26188 26200
-            show $CA 26540 26560
-            show $S/messenger/video/VideoAds.java 195 215
-            show $S/ui/Adapters/DialogsSearchAdapter.java 1125 1160
+            echo; echo "=== классы-страницы (ViewPage), ищем экран ввода номера ==="
+            grep -n "class.*Phone.*View\|class.*ViewPage\|PhoneView extends\|setPage(" "$S" | cut -c1-200 | head -60
 
-            echo; echo "=== StarGiftSheet: addRow ==="
-            grep -n "addRow(" $S/ui/Stars/StarGiftSheet.java | cut -c1-200 | head -60
-          } > recon2.txt
-          echo "Готово, строк в файле: $(wc -l < recon2.txt)"
+            echo; echo "=== кнопка 'далее' / стрелка (floatingButton) ==="
+            grep -n "floatingButton\|floatingButtonIcon\|FloatingActionButton\|nextPressed\|onNextPressed" "$S" | cut -c1-200 | head -60
 
-      - name: Вложение к запуску (запасной вариант)
-        uses: actions/upload-artifact@v4
-        with:
-          name: recon2
-          path: recon2.txt
+            echo; echo "=== строка 'Страна' / countryButton ==="
+            grep -n "countryButton\|CountrySelectActivity\|countryState" "$S" | cut -c1-200 | head -40
+
+            echo; echo "=== верхняя панель / actionBar в LoginActivity ==="
+            grep -n "actionBar.setBackButtonImage\|createView(Context context)\|class PhoneView" "$S" | cut -c1-200 | head -40
+          } > recon_login.txt
+          wc -l recon_login.txt
 
       - name: Выложить результат в ветку recon-out
         run: |
-          mkdir /tmp/out && cp recon2.txt /tmp/out/
+          mkdir /tmp/out && cp recon_login.txt /tmp/out/
           git config user.name "recon-bot"
           git config user.email "recon@users.noreply.github.com"
           git checkout --orphan recon-out
           git rm -rf . > /dev/null
-          cp /tmp/out/recon2.txt .
-          git add recon2.txt
-          git commit -m "recon output"
+          cp /tmp/out/recon_login.txt .
+          git add recon_login.txt
+          git commit -m "recon login"
           git push -f origin recon-out
-
-          BLOB="https://github.com/$GITHUB_REPOSITORY/blob/recon-out/recon2.txt"
-          RAW="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/recon-out/recon2.txt"
-          BRANCH="https://github.com/$GITHUB_REPOSITORY/tree/recon-out"
-          echo "=========================================="
-          echo "Файл сохранён в ветку recon-out:"
-          echo "  Ветка:  $BRANCH"
-          echo "  Файл:   $BLOB"
-          echo "  Raw:    $RAW"
-          echo "=========================================="
-          {
-            echo "### Результат сохранён"
-            echo "- Ветка: $BRANCH"
-            echo "- Файл: $BLOB"
-            echo "- Raw (эту ссылку пришли Claude): $RAW"
-            echo "- Запасной вариант: блок Artifacts внизу этой страницы, архив recon2"
-          } >> "$GITHUB_STEP_SUMMARY"
+          RAW="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/recon-out/recon_login.txt"
+          echo "- Raw (пришли Claude): $RAW" >> "$GITHUB_STEP_SUMMARY"
