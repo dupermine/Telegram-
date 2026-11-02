@@ -1,1 +1,6 @@
-{"versionCode": 0, "versionName": "init", "apkUrl": "", "notes": ""}
+{
+  "versionCode": 2,
+  "versionName": "build-2",
+  "apkUrl": "https://github.com/dupermine/Telegram-/releases/download/build-2/app.apk",
+  "notes": "Автосборка из коммита 88f826e"
+}
