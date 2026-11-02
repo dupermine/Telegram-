@@ -1,0 +1,172 @@
+=== размер файла ===
+10368 TMessagesProj/src/main/java/org/telegram/ui/LoginActivity.java
+
+=== классы-страницы (ViewPage), ищем экран ввода номера ===
+933:                    setPage(VIEW_PHONE_INPUT, false, null, true);
+1111:                setPage(VIEW_PHONE_INPUT, true, null, true);
+1116:                setPage(VIEW_PASSWORD, true, null, true);
+1120:                setPage(VIEW_PHONE_INPUT, true, null, true);
+1129:                setPage(VIEW_RECOVER, true, null, true);
+1134:                setPage(VIEW_NEW_PASSWORD_STAGE_1, true, null, true);
+1139:                setPage(VIEW_ADD_EMAIL, true, null, true);
+1143:                setPage(VIEW_PHONE_INPUT, true, null, true);
+1502:    public void setPage(@ViewNumber int page, boolean animated, Bundle params, boolean back) {
+1689:        setPage(VIEW_CODE_EMAIL_SETUP, true, params, false);
+1724:                                    setPage(VIEW_PHONE_INPUT, true, null, true);
+1767:            setPage(VIEW_PAY, true, params, true);
+1901:            setPage(VIEW_CODE_MESSAGE, animate, params, false);
+1910:                setPage(VIEW_CODE_CALL, animate, params, false);
+1914:                setPage(VIEW_CODE_FLASH_CALL, animate, params, false);
+1919:                setPage(VIEW_CODE_SMS, animate, params, false);
+1924:                setPage(VIEW_CODE_FRAGMENT_SMS, animate, params, false);
+1929:                setPage(VIEW_CODE_MISSED_CALL, animate, params, false);
+1932:                setPage(VIEW_ADD_EMAIL, animate, params, false);
+1940:                setPage(VIEW_CODE_EMAIL, animate, params, false);
+1945:                setPage(VIEW_CODE_WORD, animate, params, false);
+1950:                setPage(VIEW_CODE_PHRASE, animate, params, false);
+1957:    public class PhoneView extends SlideView implements AdapterView.OnItemSelectedListener, NotificationCenter.NotificationCenterDelegate {
+3192:                            setPage(VIEW_REGISTER, true, params, false);
+3217:                                    setPage(VIEW_PASSWORD, true, bundle, false);
+3234:                            setPage(VIEW_PHONE_INPUT, true, null, true);
+3462:                            setPage(VIEW_PASSWORD, true, bundle, false);
+4100:                                .setNegativeButton(getString(R.string.DidNotGetTheCodeEditNumberButton), (dialog, which) -> setPage(VIEW_PHONE_INPUT, true, null, true))
+4201:                        setPage(VIEW_PAY, true, params, true);
+4211:                            setPage(VIEW_PHONE_INPUT, true, null, true);
+4804:                                    setPage(VIEW_PHONE_INPUT, true, null, true);
+4876:                                setPage(VIEW_PHONE_INPUT, true, null, true);
+4917:                                animateSuccess(() -> setPage(VIEW_REGISTER, true, params, false));
+4943:                                        animateSuccess(() -> setPage(VIEW_PASSWORD, true, bundle, false));
+4978:                                        setPage(VIEW_PHONE_INPUT, true, null, true);
+5071:                setPage(prevType, true, null, true);
+5082:                            setPage(VIEW_PHONE_INPUT, true, null, true);
+5455:                                setPage(VIEW_RECOVER, true, bundle, false);
+5774:                                        setPage(VIEW_PHONE_INPUT, true, null, true);
+5782:                                    setPage(VIEW_REGISTER, true, params, false);
+6186:                        setPage(VIEW_PHONE_INPUT, true, null, true);
+6421:                                        setPage(VIEW_PHONE_INPUT, true, null, true);
+6558:                        setPage(VIEW_PHONE_INPUT, true, null, true);
+6895:                        animateSuccess(() -> setPage(VIEW_REGISTER, true, params, false));
+6928:                                animateSuccess(() -> setPage(VIEW_PASSWORD, true, bundle, false));
+6950:                            setPage(VIEW_PHONE_INPUT, true, null, true);
+7158:                        .setPositiveButton(getString(R.string.OK), (dialogInterface, i) -> setPage(VIEW_PASSWORD, true, new Bundle(), true))
+7295:                    setPage(VIEW_NEW_PASSWORD_STAGE_1, true, params, false);
+7602:                setPage(VIEW_NEW_PASSWORD_STAGE_2, true, params, false);
+7794:                        setPage(VIEW_PHONE_INPUT, true, null, true);
+8188:                    setPage(VIEW_PHONE_INPUT, true, null, true);
+8295:                        setPage(VIEW_PHONE_INPUT, true, null, true);
+8529:                        setPage(VIEW_PHONE_INPUT, true, null, true);
+8536:                    setPage(VIEW_REGISTER, true, params, false);
+8547:                        setPage(VIEW_RESET_WAIT, true, params, false);
+8558:    private final static class PhoneNumberConfirmView extends FrameLayout {
+9146:                                setPage(VIEW_PHONE_INPUT, true, null, true);
+9416:                        setPage(VIEW_REGISTER, true, params, false);
+9442:                                setPage(VIEW_PASSWORD, true, bundle, false);
+9464:                                setPage(VIEW_PHONE_INPUT, true, null, true);
+
+=== кнопка 'далее' / стрелка (floatingButton) ===
+349:    private TransformableLoginButtonView floatingButtonIcon;
+350:    private FragmentFloatingButton floatingButton;
+568:                MarginLayoutParams marginLayoutParams = (MarginLayoutParams) floatingButton.getLayoutParams();
+728:        floatingButton = new FragmentFloatingButton(context, resourceProvider);
+729:        floatingButton.setButtonVisible(doneButtonVisible[DONE_TYPE_FLOATING], false);
+730:        floatingAutoAnimator = VerticalPositionAutoAnimator.attach(floatingButton);
+731:        sizeNotifierFrameLayout.addView(floatingButton, FragmentFloatingButton.createDefaultLayoutParamsBig());
+732:        floatingButton.setOnClickListener(view -> onDoneButtonPressed());
+783:        floatingButtonIcon = new TransformableLoginButtonView(context);
+784:        floatingButtonIcon.setTransformType(TransformableLoginButtonView.TRANSFORM_OPEN_ARROW);
+785:        floatingButtonIcon.setProgress(1f);
+786:        floatingButtonIcon.setDrawBackground(false);
+787:        floatingButton.setContentDescription(getString(R.string.Done));
+788:        floatingButton.addView(floatingButtonIcon, LayoutHelper.createFrame(56, 56, Gravity.CENTER));
+789:        floatingButton.addAdditionalView(floatingButtonIcon);
+973:                views[currentViewNum].onNextPressed(null);
+1297:                floatingButton.setButtonVisible(show, animated);
+1304:                            if (floating && floatingButtonIcon.getAlpha() != 1f) {
+1305:                                floatingButtonIcon.setAlpha(1f);
+1306:                                floatingButtonIcon.setScaleX(1f);
+1307:                                floatingButtonIcon.setScaleY(1f);
+1308:                                floatingButtonIcon.setVisibility(View.VISIBLE);
+1340:                floatingButton.setButtonVisible(show, animated);
+1363:            views[currentViewNum].onNextPressed(null);
+1410:            floatingButton.setProgressVisible(show, animated);
+1983:        private boolean nextPressed = false;
+2451:                    onNextPressed(null);
+2838:            nextPressed = false;
+2859:        public void onNextPressed(String code) {
+2860:            if (getParentActivity() == null || nextPressed || isRequestingFirebaseSms) {
+2875:                    keyboardHideCallback = () -> postDelayed(()-> onNextPressed(code), 200);
+2880:                phoneNumberConfirmView = new PhoneNumberConfirmView(fragmentView.getContext(), (ViewGroup) fragmentView, floatingButton, phoneNumber, new PhoneNumberConfirmView.IConfirmDialogCall
+2967:                                onNextPressed(code);
+2968:                                floatingButton.progressView.sync(confirmView.fabButton.progressView);
+3177:            nextPressed = true;
+3183:                nextPressed = false;
+3204:                                nextPressed = false;
+3450:                        nextPressed = false;
+3601:        private boolean nextPressed;
+3689:                        onNextPressed(null);
+3768:                        onNextPressed(null);
+3883:                        return isClickable() && getVisibility() == View.VISIBLE && !(nextPressed || timeText != null && timeText.getVisibility() != View.GONE || isResendingCode);
+3951:                    if (nextPressed || timeText != null && timeText.getVisibility() != View.GONE || isResendingCode) {
+4157:            nextPressed = false;
+4161:            if (nextPressed || isResendingCode || isRequestingFirebaseSms) {
+4175:            nextPressed = true;
+4181:                nextPressed = false;
+4489:                    onNextPressed(callLogNumber);
+4491:                    onNextPressed(catchedPhone);
+4520:                    onNextPressed(null);
+4700:        public void onNextPressed(String code) {
+4702:                if (nextPressed) {
+4706:                if (nextPressed || (currentViewNum < VIEW_CODE_MESSAGE || currentViewNum > VIEW_CODE_CALL) && currentViewNum != VIEW_CODE_FRAGMENT_SMS) {
+4723:            nextPressed = true;
+4749:                        nextPressed = false;
+4780:                            nextPressed = false;
+4841:                        nextPressed = false;
+4902:                            nextPressed = false;
+4927:                                    nextPressed = false;
+4951:                                nextPressed = false;
+
+=== строка 'Страна' / countryButton ===
+1961:        private TextViewSwitcher countryButton;
+1972:        private int countryState = COUNTRY_STATE_NOT_SET_OR_VALID;
+1973:        private CountrySelectActivity.Country currentCountry;
+1975:        private ArrayList<CountrySelectActivity.Country> countriesArray = new ArrayList<>();
+1976:        private HashMap<String, List<CountrySelectActivity.Country>> codesMap = new HashMap<>();
+2057:            countryButton = new TextViewSwitcher(context);
+2058:            countryButton.setFactory(() -> {
+2073:            countryButton.setInAnimation(anim);
+2078:            LinearLayout countryButtonLinearLayout = new LinearLayout(context);
+2079:            countryButtonLinearLayout.setOrientation(HORIZONTAL);
+2080:            countryButtonLinearLayout.setGravity(Gravity.CENTER_VERTICAL);
+2081:            countryButtonLinearLayout.addView(countryButton, LayoutHelper.createLinear(0, LayoutHelper.WRAP_CONTENT, 1f, 0, 0, 0, 0));
+2082:            countryButtonLinearLayout.addView(chevronRight, LayoutHelper.createLinearRelatively(24, 24, 0, 0, 0, 14, 0));
+2086:            countryOutlineView.addView(countryButtonLinearLayout, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT, Gravity.TOP, 0, 0, 0, 0));
+2093:                CountrySelectActivity fragment = new CountrySelectActivity(true, countriesArray);
+2094:                fragment.setCountrySelectActivityDelegate((country) -> {
+2163:                        countryState = COUNTRY_STATE_EMPTY;
+2165:                        CountrySelectActivity.Country country;
+2172:                                List<CountrySelectActivity.Country> list = codesMap.get(sub);
+2181:                                        for (CountrySelectActivity.Country c : countriesArray) {
+2205:                        CountrySelectActivity.Country lastMatchedCountry = null;
+2207:                        for (CountrySelectActivity.Country c : countriesArray) {
+2223:                        List<CountrySelectActivity.Country> list = codesMap.get(text);
+2232:                                for (CountrySelectActivity.Country c : countriesArray) {
+2247:                            countryState = COUNTRY_STATE_NOT_SET_OR_VALID;
+2251:                            countryState = COUNTRY_STATE_INVALID;
+2311:                        if (countryState == COUNTRY_STATE_INVALID) {
+2315:                        if (countryState == COUNTRY_STATE_INVALID) {
+2370:                        List<CountrySelectActivity.Country> list = codesMap.get(code);
+2513:                    CountrySelectActivity.Country countryWithCode = new CountrySelectActivity.Country();
+2526:                    List<CountrySelectActivity.Country> countryList = codesMap.get(args[0]);
+2572:                countryState = COUNTRY_STATE_EMPTY;
+2601:                                    CountrySelectActivity.Country countryWithCode = new CountrySelectActivity.Country();
+2611:                                    List<CountrySelectActivity.Country> countryList = codesMap.get(countryCode.country_code);
+2631:                                        CountrySelectActivity.Country country2;
+2632:                                        List<CountrySelectActivity.Country> list = codesMap.get(sub);
+2641:                                                for (CountrySelectActivity.Country c : countriesArray) {
+2676:            for (int i = 0; i < countryButton.getChildCount(); i++) {
+2677:                TextView textView = (TextView) countryButton.getChildAt(i);
+2726:        public void selectCountry(CountrySelectActivity.Country country) {
+
+=== верхняя панель / actionBar в LoginActivity ===
+540:    public View createView(Context context) {
+1957:    public class PhoneView extends SlideView implements AdapterView.OnItemSelectedListener, NotificationCenter.NotificationCenterDelegate {
